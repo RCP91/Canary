@@ -68,6 +68,7 @@ int CanaryServer::run() {
 			g_game().setGameState(GAME_STATE_INIT);
 
 			setupHousesRent();
+			g_game().transferHouseItemsToDepot();
 
 			IOMarket::checkExpiredOffers();
 			IOMarket::getInstance().updateStatistics();

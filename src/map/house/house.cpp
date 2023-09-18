@@ -24,12 +24,61 @@ void House::addTile(HouseTile* tile) {
 	updateDoorDescription();
 }
 
+void House::setNewOwnerGuid(int32_t newOwnerGuid, bool serverStartup) {
+	std::ostringstream query;
+	query << "UPDATE `houses` SET `new_owner` = " << newOwnerGuid << " WHERE `id` = " << id;
+
+	Database &db = Database::getInstance();
+	db.executeQuery(query.str());
+	if (!serverStartup) {
+		setNewOwnership();
+	}
+}
+
+bool House::tryTransferOwnership(Player* player, bool serverStartup) {
+	for (HouseTile* tile : houseTiles) {
+		if (const CreatureVector* creatures = tile->getCreatures()) {
+			for (int32_t i = creatures->size(); --i >= 0;) {
+				kickPlayer(nullptr, (*creatures)[i]->getPlayer());
+			}
+		}
+	}
+
+	// Remove players from beds
+	for (BedItem* bed : bedsList) {
+		if (bed->getSleeper() != 0) {
+			bed->wakeUp(nullptr);
+		}
+	}
+
+	// Clean access lists
+	if (!serverStartup) {
+		owner = 0;
+		ownerAccountId = 0;
+	}
+	setAccessList(SUBOWNER_LIST, "");
+	setAccessList(GUEST_LIST, "");
+
+	for (Door* door : doorList) {
+		door->setAccessList("");
+	}
+
+	bool transferSuccess = false;
+	if (player) {
+		transferSuccess = transferToDepot(player);
+	} else {
+		transferSuccess = transferToDepot();
+	}
+
+	return transferSuccess;
+}
+
 void House::setOwner(uint32_t guid, bool updateDatabase /* = true*/, Player* player /* = nullptr*/) {
 	if (updateDatabase && owner != guid) {
 		Database &db = Database::getInstance();
 
 		std::ostringstream query;
-		query << "UPDATE `houses` SET `owner` = " << guid << ", `bid` = 0, `bid_end` = 0, `last_bid` = 0, `highest_bidder` = 0  WHERE `id` = " << id;
+		query << "UPDATE `houses` SET `owner` = " << guid << ", `new_owner` = -1, `bid` = 0, `bid_end` = 0, `last_bid` = 0, `highest_bidder` = 0  WHERE `id` = " << id;
 		db.executeQuery(query.str());
 	}
 
@@ -40,37 +89,7 @@ void House::setOwner(uint32_t guid, bool updateDatabase /* = true*/, Player* pla
 	isLoaded = true;
 
 	if (owner != 0) {
-		// Send items to depot
-		if (player) {
-			transferToDepot(player);
-		} else {
-			transferToDepot();
-		}
-
-		for (HouseTile* tile : houseTiles) {
-			if (const CreatureVector* creatures = tile->getCreatures()) {
-				for (int32_t i = creatures->size(); --i >= 0;) {
-					kickPlayer(nullptr, (*creatures)[i]->getPlayer());
-				}
-			}
-		}
-
-		// Remove players from beds
-		for (BedItem* bed : bedsList) {
-			if (bed->getSleeper() != 0) {
-				bed->wakeUp(nullptr);
-			}
-		}
-
-		// clean access lists
-		owner = 0;
-		ownerAccountId = 0;
-		setAccessList(SUBOWNER_LIST, "");
-		setAccessList(GUEST_LIST, "");
-
-		for (Door* door : doorList) {
-			door->setAccessList("");
-		}
+		tryTransferOwnership(player, false);
 	} else {
 		std::string strRentPeriod = asLowerCaseString(g_configManager().getString(HOUSE_RENT_PERIOD));
 		time_t currentTime = time(nullptr);
@@ -217,7 +236,7 @@ void House::setAccessList(uint32_t listId, const std::string &textlist) {
 }
 
 bool House::transferToDepot() const {
-	if (townId == 0 || owner == 0) {
+	if (townId == 0) {
 		return false;
 	}
 
@@ -231,13 +250,12 @@ bool House::transferToDepot() const {
 		}
 
 		transferToDepot(&tmpPlayer);
-		IOLoginData::savePlayer(&tmpPlayer);
 	}
 	return true;
 }
 
 bool House::transferToDepot(Player* player) const {
-	if (townId == 0 || owner == 0) {
+	if (townId == 0 || !player) {
 		return false;
 	}
 	ItemList moveItemList;
@@ -256,13 +274,48 @@ bool House::transferToDepot(Player* player) const {
 	}
 
 	for (Item* item : moveItemList) {
+		g_logger().debug("[{}] moving item '{}' to depot", __FUNCTION__, item->getName());
 		g_game().internalMoveItem(item->getParent(), player->getInbox(), INDEX_WHEREEVER, item, item->getItemCount(), nullptr, FLAG_NOLIMIT);
 	}
+	IOLoginData::savePlayer(player);
 	return true;
+}
+
+bool House::hasItemOnTile() const {
+	bool foundItem = false;
+	for (HouseTile* tile : houseTiles) {
+		if (const TileItemVector* items = tile->getItemList()) {
+			for (Item* item : *items) {
+				if (item->isWrapable()) {
+					foundItem = true;
+					break;
+				} else if (item->isPickupable()) {
+					foundItem = true;
+					break;
+				} else {
+					if (const auto container = item->getContainer()) {
+						foundItem = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	return foundItem;
+}
+
+bool House::hasNewOwnership() const {
+	return setNewOwnerOnStartup;
+}
+
+void House::setNewOwnership() {
+	setNewOwnerOnStartup = true;
 }
 
 void House::handleWrapableItem(ItemList &moveItemList, Item* item, Player* player, HouseTile* houseTile) const {
 	if (item->isWrapContainer()) {
+		g_logger().debug("[{}] found wrapable item '{}'", __FUNCTION__, item->getName());
 		handleContainer(moveItemList, item);
 	}
 
@@ -396,6 +449,11 @@ HouseTransferItem* HouseTransferItem::createHouseTransferItem(House* house) {
 void HouseTransferItem::onTradeEvent(TradeEvents_t event, Player* owner) {
 	if (event == ON_TRADE_TRANSFER) {
 		if (house) {
+			owner->sendTextMessage(MESSAGE_EVENT_ADVANCE, "You have successfully bought the house. The ownership will be transferred upon server restart.");
+			auto oldOwner = g_game().getPlayerByGUID(house->getOwner());
+			if (oldOwner) {
+				oldOwner->sendTextMessage(MESSAGE_EVENT_ADVANCE, "You have successfully sold your house. The ownership will be transferred upon server restart.");
+			}
 			house->executeTransfer(this, owner);
 		}
 
@@ -412,7 +470,11 @@ bool House::executeTransfer(HouseTransferItem* item, Player* newOwner) {
 		return false;
 	}
 
-	setOwner(newOwner->getGUID());
+	if (setNewOwnerOnStartup) {
+		return false;
+	}
+
+	setNewOwnerGuid(newOwner->getGUID(), false);
 	transferItem = nullptr;
 	return true;
 }

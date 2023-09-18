@@ -101,7 +101,8 @@ bool IOLoginData::loadPlayerByName(Player* player, const std::string &name, bool
 
 bool IOLoginData::loadPlayer(Player* player, DBResult_ptr result, bool disable /* = false*/) {
 	if (!result || !player) {
-		g_logger().warn("[IOLoginData::loadPlayer] - Player or Resultnullptr: {}", __FUNCTION__);
+		std::string nullptrType = !result ? "Result" : "Player";
+		g_logger().warn("[{}] - {} is nullptr", __FUNCTION__, nullptrType);
 		return false;
 	}
 

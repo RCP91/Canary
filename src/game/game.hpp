@@ -640,6 +640,9 @@ public:
 	std::unique_ptr<IOWheel> &getIOWheel();
 	const std::unique_ptr<IOWheel> &getIOWheel() const;
 
+	void setTransferPlayerHouseItems(uint32_t houseId, uint32_t playerId);
+	void transferHouseItemsToDepot();
+
 private:
 	std::map<uint32_t, int32_t> forgeMonsterEventIds;
 	std::set<uint32_t> fiendishMonsters;
@@ -768,6 +771,8 @@ private:
 	std::map<uint32_t, Npc*> npcs;
 	std::map<uint32_t, Monster*> monsters;
 	std::vector<uint32_t> forgeableMonsters;
+
+	std::map<uint32_t, uint32_t> transferHouseItemsToPlayer;
 
 	std::map<uint32_t, TeamFinder*> teamFinderMap; // [leaderGUID] = TeamFinder*
 

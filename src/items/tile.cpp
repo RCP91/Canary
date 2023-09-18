@@ -735,7 +735,7 @@ ReturnValue Tile::queryAdd(int32_t, const Thing &thing, uint32_t, uint32_t tileF
 			if (ground) {
 				const ItemType &iiType = Item::items[ground->getID()];
 				if (iiType.blockSolid) {
-					if (!iiType.pickupable || item->isMagicField() || item->isBlocking()) {
+					if (!iiType.pickupable && iiType.type != ITEM_TYPE_TRASHHOLDER || item->isMagicField() || item->isBlocking()) {
 						if (!item->isPickupable() && !item->isCarpet()) {
 							return RETURNVALUE_NOTENOUGHROOM;
 						}
